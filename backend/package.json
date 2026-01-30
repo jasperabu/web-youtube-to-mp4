@@ -1,14 +1,22 @@
 {
   "name": "yt-backend",
-  "type": "module",
   "version": "1.0.0",
+  "description": "YouTube to MP4/MP3 downloader backend",
+  "type": "module",
+  "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
+  "keywords": ["youtube", "downloader", "mp4", "mp3"],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
+    "express": "^4.18.2",
     "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "react-router-dom": "^7.13.0",
     "yt-dlp-exec": "^1.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
