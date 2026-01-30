@@ -10,7 +10,11 @@ import { promisify } from "util";
 const execPromise = promisify(exec);
 
 const app = express();
-const PORT = 4000;
+const PORT = process.env.PORT || 4000;
+
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
 
 // CRITICAL: Enhanced CORS configuration for streaming
 app.use(cors({
