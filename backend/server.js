@@ -21,7 +21,7 @@ const ytdlpPath = '/opt/render/project/src/.venv/bin/yt-dlp';
 const ytdlpExec = (url, options = {}) => {
   return ytdlp(url, {
     ...options,
-    ytdlpPath: ytdlpPath
+    binaryPath: ytdlpPath
   });
 };
 
