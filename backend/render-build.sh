@@ -5,20 +5,22 @@ echo "🔧 Starting build process..."
 
 # Check current directory
 echo "📂 Current directory: $(pwd)"
-echo "📂 Directory contents:"
-ls -la
 
-# Install dependencies (we're already in the backend directory on Render)
+# Install npm dependencies
 echo "📦 Installing npm dependencies..."
 npm install
 
-# Install yt-dlp via pip (more reliable on Render)
+# Install yt-dlp via pip
 echo "📥 Installing yt-dlp via pip..."
-pip install --break-system-packages yt-dlp
+pip install --break-system-packages -U yt-dlp
 
 # Verify installation
 echo "✅ Verifying yt-dlp installation..."
 which yt-dlp
 yt-dlp --version
+
+# Update yt-dlp to latest (important for YouTube compatibility)
+echo "🔄 Updating yt-dlp to latest version..."
+pip install --break-system-packages -U yt-dlp
 
 echo "✨ Build complete!"

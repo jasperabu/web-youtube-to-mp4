@@ -13,8 +13,8 @@ const execPromise = promisify(exec);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configure yt-dlp to use the system-installed binary
-const YTDLP_PATH = '/opt/render/project/src/.venv/bin/yt-dlp';
+// Use system yt-dlp (installed via pip in build.sh)
+const YTDLP_PATH = 'yt-dlp';
 
 // Helper function to execute yt-dlp with JSON output
 async function getVideoInfo(url, extraArgs = []) {
@@ -44,19 +44,20 @@ async function getVideoInfo(url, extraArgs = []) {
 
     process.on('close', (code) => {
       if (code !== 0) {
+        console.error('yt-dlp stderr:', stderr);
         reject(new Error(`yt-dlp exited with code ${code}: ${stderr}`));
       } else {
         try {
           const json = JSON.parse(stdout);
           resolve(json);
         } catch (err) {
-          reject(new Error(`Failed to parse JSON: ${err.message}`));
+          reject(new Error(`Failed to parse JSON: ${err.message}\nOutput: ${stdout.substring(0, 500)}`));
         }
       }
     });
 
     process.on('error', (err) => {
-      reject(err);
+      reject(new Error(`Failed to spawn yt-dlp: ${err.message}. Make sure yt-dlp is installed.`));
     });
   });
 }
@@ -73,6 +74,14 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'YouTube to MP4 API Running',
+    endpoints: ['/health', '/api/diagnostic', '/api/formats', '/api/download']
+  });
+});
+
 // Diagnostic endpoint
 app.get('/api/diagnostic', async (req, res) => {
   try {
@@ -83,22 +92,17 @@ app.get('/api/diagnostic', async (req, res) => {
       ytdlpConfiguredPath: YTDLP_PATH,
     };
 
-    // Check if configured yt-dlp exists
+    // Check yt-dlp
     try {
-      const { stdout: ytdlpVersion } = await execPromise(`${YTDLP_PATH} --version`);
+      const { stdout: ytdlpVersion } = await execPromise('yt-dlp --version');
       diagnostics.ytdlpVersion = ytdlpVersion.trim();
       diagnostics.ytdlpStatus = 'installed';
-    } catch (err) {
-      diagnostics.ytdlpStatus = 'not found at configured path';
-      diagnostics.ytdlpError = err.message;
-    }
-
-    // Check system yt-dlp
-    try {
+      
       const { stdout: ytdlpPath } = await execPromise('which yt-dlp');
-      diagnostics.systemYtdlpPath = ytdlpPath.trim();
+      diagnostics.ytdlpPath = ytdlpPath.trim();
     } catch (err) {
-      diagnostics.systemYtdlpPath = 'not in PATH';
+      diagnostics.ytdlpStatus = 'not found';
+      diagnostics.ytdlpError = err.message;
     }
 
     // Check ffmpeg
@@ -121,7 +125,7 @@ app.get('/api/diagnostic', async (req, res) => {
 app.get('/api/test-ytdlp', async (req, res) => {
   try {
     console.log('Testing yt-dlp with a simple video...');
-    console.log('Using yt-dlp at:', YTDLP_PATH);
+    console.log('Using yt-dlp command:', YTDLP_PATH);
     
     const testUrl = 'https://www.youtube.com/watch?v=jNQXAC9IVRw'; // Short "Me at the zoo" video
     
@@ -155,32 +159,53 @@ app.get('/api/formats', async (req, res) => {
 
     const output = await getVideoInfo(url);
 
-    // Filter for formats with both video and audio
-    const formats = output.formats
-      .filter(f => f.vcodec !== 'none' && f.acodec !== 'none')
+    // Separate video and audio formats
+    const videoFormats = output.formats
+      .filter(f => f.vcodec !== 'none' && f.height) // Has video
       .map(f => ({
         format_id: f.format_id,
         ext: f.ext,
+        quality: f.height,
         resolution: f.resolution || `${f.width}x${f.height}`,
         filesize: f.filesize,
-        quality: f.quality,
         fps: f.fps,
         vcodec: f.vcodec,
         acodec: f.acodec
       }))
-      .sort((a, b) => {
-        const getHeight = (res) => {
-          const match = res.match(/\d+/);
-          return match ? parseInt(match[0]) : 0;
-        };
-        return getHeight(b.resolution) - getHeight(a.resolution);
-      });
+      // Remove duplicates by quality, keep best format for each quality
+      .reduce((acc, curr) => {
+        const existing = acc.find(f => f.quality === curr.quality);
+        if (!existing || (curr.filesize && (!existing.filesize || curr.filesize > existing.filesize))) {
+          return [...acc.filter(f => f.quality !== curr.quality), curr];
+        }
+        return acc;
+      }, [])
+      .sort((a, b) => b.quality - a.quality)
+      .slice(0, 10); // Limit to top 10 formats
+
+    const audioFormats = output.formats
+      .filter(f => f.acodec !== 'none' && f.vcodec === 'none') // Audio only
+      .map(f => ({
+        format_id: f.format_id,
+        ext: f.ext,
+        abr: f.abr,
+        filesize: f.filesize,
+        acodec: f.acodec
+      }))
+      .sort((a, b) => (b.abr || 0) - (a.abr || 0))
+      .slice(0, 5); // Limit to top 5 audio formats
+
+    // Extract subtitles
+    const subtitles = output.subtitles || {};
+    const automaticCaptions = output.automatic_captions || {};
 
     res.json({
       title: output.title,
       thumbnail: output.thumbnail,
-      duration: output.duration,
-      formats: formats
+      duration: output.duration_string || `${Math.floor(output.duration / 60)}:${String(output.duration % 60).padStart(2, '0')}`,
+      formats: videoFormats,
+      audio: audioFormats,
+      subtitles: { ...subtitles, ...automaticCaptions }
     });
 
   } catch (error) {
@@ -194,34 +219,63 @@ app.get('/api/formats', async (req, res) => {
 });
 
 // Download endpoint
-app.post('/api/download', async (req, res) => {
+app.get('/api/download', async (req, res) => {
   try {
-    const { url, format_id } = req.body;
+    const { url, format_id, type } = req.query;
 
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
     }
 
-    console.log('Downloading:', url, 'Format:', format_id);
+    console.log('Download request:', { url, format_id, type });
 
     // Get video info for filename
     const info = await getVideoInfo(url);
-
-    const filename = `${info.title.replace(/[^\w\s-]/gi, '_').substring(0, 100)}.mp4`;
+    const sanitizedTitle = info.title.replace(/[^\w\s-]/gi, '_').substring(0, 100);
     
+    let filename, formatArg;
+    
+    if (type === 'audio') {
+      filename = `${sanitizedTitle}.mp3`;
+      // For audio, use best audio format and convert to mp3
+      formatArg = format_id || 'bestaudio';
+    } else {
+      filename = `${sanitizedTitle}.mp4`;
+      // For video, if format_id is provided use it, otherwise use best video+audio
+      if (format_id) {
+        // Specific format requested - merge with best audio
+        formatArg = `${format_id}+bestaudio/best`;
+      } else {
+        formatArg = 'bestvideo+bestaudio/best';
+      }
+    }
+    
+    console.log('Using format:', formatArg);
+    console.log('Filename:', filename);
+
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Type', type === 'audio' ? 'audio/mpeg' : 'video/mp4');
 
     const args = [
       url,
-      '--format', format_id || 'best',
-      '--output', '-',
+      '--format', formatArg,
+      '--output', '-', // Output to stdout
       '--no-check-certificates',
       '--no-warnings',
-      '--prefer-free-formats',
+      '--quiet',
       '--add-header', 'referer:youtube.com',
       '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     ];
+
+    // Add audio conversion if needed
+    if (type === 'audio') {
+      args.push('--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
+    } else {
+      // Merge video and audio for video downloads
+      args.push('--merge-output-format', 'mp4');
+    }
+
+    console.log('Spawning yt-dlp with args:', args.join(' '));
 
     const ytdlpProcess = spawn(YTDLP_PATH, args);
     
@@ -241,6 +295,8 @@ app.post('/api/download', async (req, res) => {
     ytdlpProcess.on('close', (code) => {
       if (code !== 0) {
         console.error('yt-dlp exited with code:', code);
+      } else {
+        console.log('Download completed successfully');
       }
     });
 
@@ -269,18 +325,20 @@ async function checkDependencies() {
     const { stdout } = await execPromise('ffmpeg -version | head -n 1');
     console.log('✅ FFmpeg:', stdout.trim());
   } catch (error) {
-    console.error('❌ FFmpeg not found');
+    console.warn('⚠️  FFmpeg not found (optional, but recommended)');
   }
 
   // Check yt-dlp
   try {
-    const { stdout: pathOutput } = await execPromise('which yt-dlp');
     const { stdout: version } = await execPromise('yt-dlp --version');
+    const { stdout: pathOutput } = await execPromise('which yt-dlp');
     console.log('✅ yt-dlp:', version.trim());
     console.log('   Path:', pathOutput.trim());
   } catch (error) {
-    console.error('❌ yt-dlp not found');
+    console.error('❌ yt-dlp not found!');
     console.error('   Error:', error.message);
+    console.error('   Please install: pip install yt-dlp');
+    process.exit(1);
   }
 
   console.log('\n=========================\n');
