@@ -14,6 +14,17 @@ const execPromise = promisify(exec);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Configure yt-dlp to use the system-installed binary
+const ytdlpPath = '/opt/render/project/src/.venv/bin/yt-dlp';
+
+// Wrapper function to use system yt-dlp
+const ytdlpExec = (url, options = {}) => {
+  return ytdlp(url, {
+    ...options,
+    ytdlpPath: ytdlpPath
+  });
+};
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -68,10 +79,11 @@ app.get('/api/diagnostic', async (req, res) => {
 app.get('/api/test-ytdlp', async (req, res) => {
   try {
     console.log('Testing yt-dlp with a simple video...');
+    console.log('Using yt-dlp at:', ytdlpPath);
     
     const testUrl = 'https://www.youtube.com/watch?v=jNQXAC9IVRw'; // Short "Me at the zoo" video
     
-    const output = await ytdlp(testUrl, {
+    const output = await ytdlpExec(testUrl, {
       dumpSingleJson: true,
       noCheckCertificates: true,
       noWarnings: true,
@@ -105,7 +117,7 @@ app.get('/api/formats', async (req, res) => {
 
     console.log('Fetching formats for:', url);
 
-    const output = await ytdlp(url, {
+    const output = await ytdlpExec(url, {
       dumpSingleJson: true,
       noCheckCertificates: true,
       noWarnings: true,
@@ -172,7 +184,7 @@ app.post('/api/download', async (req, res) => {
     console.log('Downloading:', url, 'Format:', format_id);
 
     // Get video info for filename
-    const info = await ytdlp(url, {
+    const info = await ytdlpExec(url, {
       dumpSingleJson: true,
       noCheckCertificates: true,
       noWarnings: true
@@ -195,7 +207,7 @@ app.post('/api/download', async (req, res) => {
       ]
     };
 
-    const ytdlpProcess = ytdlp(url, options);
+    const ytdlpProcess = ytdlpExec(url, options);
     
     ytdlpProcess.stdout.pipe(res);
     
