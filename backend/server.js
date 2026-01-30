@@ -1,8 +1,7 @@
 import express from 'express';
 import cors from 'cors';
-import ytdlp from 'yt-dlp-exec';
 import { promisify } from 'util';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -15,15 +14,52 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Configure yt-dlp to use the system-installed binary
-const ytdlpPath = '/opt/render/project/src/.venv/bin/yt-dlp';
+const YTDLP_PATH = '/opt/render/project/src/.venv/bin/yt-dlp';
 
-// Wrapper function to use system yt-dlp
-const ytdlpExec = (url, options = {}) => {
-  return ytdlp(url, {
-    ...options,
-    binaryPath: ytdlpPath
+// Helper function to execute yt-dlp with JSON output
+async function getVideoInfo(url, extraArgs = []) {
+  const args = [
+    url,
+    '--dump-single-json',
+    '--no-check-certificates',
+    '--no-warnings',
+    '--prefer-free-formats',
+    '--add-header', 'referer:youtube.com',
+    '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    ...extraArgs
+  ];
+
+  return new Promise((resolve, reject) => {
+    const process = spawn(YTDLP_PATH, args);
+    let stdout = '';
+    let stderr = '';
+
+    process.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    process.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    process.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`yt-dlp exited with code ${code}: ${stderr}`));
+      } else {
+        try {
+          const json = JSON.parse(stdout);
+          resolve(json);
+        } catch (err) {
+          reject(new Error(`Failed to parse JSON: ${err.message}`));
+        }
+      }
+    });
+
+    process.on('error', (err) => {
+      reject(err);
+    });
   });
-};
+}
 
 // Middleware
 app.use(cors());
@@ -44,19 +80,25 @@ app.get('/api/diagnostic', async (req, res) => {
       nodeVersion: process.version,
       platform: process.platform,
       arch: process.arch,
+      ytdlpConfiguredPath: YTDLP_PATH,
     };
 
-    // Check yt-dlp
+    // Check if configured yt-dlp exists
     try {
-      const { stdout: ytdlpPath } = await execPromise('which yt-dlp');
-      diagnostics.ytdlpPath = ytdlpPath.trim();
-      
-      const { stdout: ytdlpVersion } = await execPromise('yt-dlp --version');
+      const { stdout: ytdlpVersion } = await execPromise(`${YTDLP_PATH} --version`);
       diagnostics.ytdlpVersion = ytdlpVersion.trim();
       diagnostics.ytdlpStatus = 'installed';
     } catch (err) {
-      diagnostics.ytdlpStatus = 'not found';
+      diagnostics.ytdlpStatus = 'not found at configured path';
       diagnostics.ytdlpError = err.message;
+    }
+
+    // Check system yt-dlp
+    try {
+      const { stdout: ytdlpPath } = await execPromise('which yt-dlp');
+      diagnostics.systemYtdlpPath = ytdlpPath.trim();
+    } catch (err) {
+      diagnostics.systemYtdlpPath = 'not in PATH';
     }
 
     // Check ffmpeg
@@ -79,15 +121,11 @@ app.get('/api/diagnostic', async (req, res) => {
 app.get('/api/test-ytdlp', async (req, res) => {
   try {
     console.log('Testing yt-dlp with a simple video...');
-    console.log('Using yt-dlp at:', ytdlpPath);
+    console.log('Using yt-dlp at:', YTDLP_PATH);
     
     const testUrl = 'https://www.youtube.com/watch?v=jNQXAC9IVRw'; // Short "Me at the zoo" video
     
-    const output = await ytdlpExec(testUrl, {
-      dumpSingleJson: true,
-      noCheckCertificates: true,
-      noWarnings: true,
-    });
+    const output = await getVideoInfo(testUrl);
 
     res.json({
       success: true,
@@ -99,9 +137,7 @@ app.get('/api/test-ytdlp', async (req, res) => {
     console.error('yt-dlp test error:', err);
     res.status(500).json({
       success: false,
-      error: err.message,
-      stderr: err.stderr,
-      stdout: err.stdout
+      error: err.message
     });
   }
 });
@@ -117,16 +153,7 @@ app.get('/api/formats', async (req, res) => {
 
     console.log('Fetching formats for:', url);
 
-    const output = await ytdlpExec(url, {
-      dumpSingleJson: true,
-      noCheckCertificates: true,
-      noWarnings: true,
-      preferFreeFormats: true,
-      addHeader: [
-        'referer:youtube.com',
-        'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      ]
-    });
+    const output = await getVideoInfo(url);
 
     // Filter for formats with both video and audio
     const formats = output.formats
@@ -158,16 +185,10 @@ app.get('/api/formats', async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching formats:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stderr: error.stderr,
-      stdout: error.stdout
-    });
     
     res.status(500).json({ 
       error: 'Failed to fetch video formats',
-      details: error.message,
-      stderr: error.stderr
+      details: error.message
     });
   }
 });
@@ -184,32 +205,31 @@ app.post('/api/download', async (req, res) => {
     console.log('Downloading:', url, 'Format:', format_id);
 
     // Get video info for filename
-    const info = await ytdlpExec(url, {
-      dumpSingleJson: true,
-      noCheckCertificates: true,
-      noWarnings: true
-    });
+    const info = await getVideoInfo(url);
 
     const filename = `${info.title.replace(/[^\w\s-]/gi, '_').substring(0, 100)}.mp4`;
     
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', 'video/mp4');
 
-    const options = {
-      format: format_id || 'best',
-      output: '-',
-      noCheckCertificates: true,
-      noWarnings: true,
-      preferFreeFormats: true,
-      addHeader: [
-        'referer:youtube.com',
-        'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      ]
-    };
+    const args = [
+      url,
+      '--format', format_id || 'best',
+      '--output', '-',
+      '--no-check-certificates',
+      '--no-warnings',
+      '--prefer-free-formats',
+      '--add-header', 'referer:youtube.com',
+      '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    ];
 
-    const ytdlpProcess = ytdlpExec(url, options);
+    const ytdlpProcess = spawn(YTDLP_PATH, args);
     
     ytdlpProcess.stdout.pipe(res);
+    
+    ytdlpProcess.stderr.on('data', (data) => {
+      console.error('yt-dlp stderr:', data.toString());
+    });
     
     ytdlpProcess.on('error', (error) => {
       console.error('Download error:', error);
