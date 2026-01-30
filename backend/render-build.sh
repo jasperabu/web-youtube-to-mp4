@@ -19,8 +19,4 @@ echo "✅ Verifying yt-dlp installation..."
 which yt-dlp
 yt-dlp --version
 
-# Update yt-dlp to latest (important for YouTube compatibility)
-echo "🔄 Updating yt-dlp to latest version..."
-pip install --break-system-packages -U yt-dlp
-
 echo "✨ Build complete!"
