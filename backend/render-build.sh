@@ -3,9 +3,13 @@ set -e
 
 echo "🔧 Starting build process..."
 
-# Install dependencies
+# Check current directory
+echo "📂 Current directory: $(pwd)"
+echo "📂 Directory contents:"
+ls -la
+
+# Install dependencies (we're already in the backend directory on Render)
 echo "📦 Installing npm dependencies..."
-cd backend
 npm install
 
 # Install yt-dlp via pip (more reliable on Render)
