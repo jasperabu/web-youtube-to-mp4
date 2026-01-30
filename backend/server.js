@@ -1,9 +1,13 @@
-const express = require('express');
-const cors = require('cors');
-const ytdlp = require('yt-dlp-exec');
-const { promisify } = require('util');
-const { exec } = require('child_process');
-const path = require('path');
+import express from 'express';
+import cors from 'cors';
+import ytdlp from 'yt-dlp-exec';
+import { promisify } from 'util';
+import { exec } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const execPromise = promisify(exec);
 
@@ -238,10 +242,10 @@ async function checkDependencies() {
 
   // Check yt-dlp
   try {
-    const { stdout: path } = await execPromise('which yt-dlp');
+    const { stdout: pathOutput } = await execPromise('which yt-dlp');
     const { stdout: version } = await execPromise('yt-dlp --version');
     console.log('✅ yt-dlp:', version.trim());
-    console.log('   Path:', path.trim());
+    console.log('   Path:', pathOutput.trim());
   } catch (error) {
     console.error('❌ yt-dlp not found');
     console.error('   Error:', error.message);
