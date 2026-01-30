@@ -1,6 +1,10 @@
 import { RefreshCw, Video, Music, FileText, Download, Loader2, AlertCircle } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 
+// 🔥 ADD THIS AT THE TOP - Change this when you deploy to Render
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+// When deployed, set REACT_APP_API_URL to: https://your-app-name.onrender.com
+
 type FormatType = 'mp4' | 'mp3' | 'subtitle';
 
 type Resolution = {
@@ -56,7 +60,8 @@ export default function Hero(): JSX.Element {
 
   // Check backend connection on mount
   useEffect(() => {
-    fetch('http://localhost:4000/')
+    console.log('🌐 API URL:', API_URL);
+    fetch(`${API_URL}/`)
       .then(r => r.text())
       .then(text => {
         console.log('✅ Backend response:', text);
@@ -89,7 +94,7 @@ export default function Hero(): JSX.Element {
 
     try {
       const res = await fetch(
-        `http://localhost:4000/api/formats?url=${encodeURIComponent(url)}`
+        `${API_URL}/api/formats?url=${encodeURIComponent(url)}`
       );
 
       if (!res.ok) {
@@ -143,7 +148,7 @@ export default function Hero(): JSX.Element {
         format_id: formatId,
       });
       
-      const downloadUrl = `http://localhost:4000/api/download?${params.toString()}`;
+      const downloadUrl = `${API_URL}/api/download?${params.toString()}`;
       
       console.log(`🔽 Starting ${type} download:`, downloadUrl);
       setDownloadStatus('Connecting to server...');
