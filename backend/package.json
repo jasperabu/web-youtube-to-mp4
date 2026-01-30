@@ -1,0 +1,14 @@
+{
+  "name": "yt-backend",
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "react-router-dom": "^7.13.0",
+    "yt-dlp-exec": "^1.0.2"
+  }
+}
