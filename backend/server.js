@@ -4,6 +4,7 @@ import { promisify } from 'util';
 import { exec, spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,9 @@ const PORT = process.env.PORT || 3000;
 // Use system yt-dlp (installed via pip in build.sh)
 const YTDLP_PATH = 'yt-dlp';
 
+// Path for cookies file (if you decide to use one)
+const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
+
 // Helper function to execute yt-dlp with JSON output
 async function getVideoInfo(url, extraArgs = []) {
   const args = [
@@ -24,10 +28,19 @@ async function getVideoInfo(url, extraArgs = []) {
     '--no-check-certificates',
     '--no-warnings',
     '--prefer-free-formats',
+    // Bypass bot detection
+    '--extractor-args', 'youtube:player_client=android',
     '--add-header', 'referer:youtube.com',
     '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    '--add-header', 'accept-language:en-US,en;q=0.9',
     ...extraArgs
   ];
+
+  // Add cookies if file exists
+  if (fs.existsSync(COOKIES_PATH)) {
+    args.push('--cookies', COOKIES_PATH);
+    console.log('Using cookies file:', COOKIES_PATH);
+  }
 
   return new Promise((resolve, reject) => {
     const process = spawn(YTDLP_PATH, args);
@@ -45,19 +58,29 @@ async function getVideoInfo(url, extraArgs = []) {
     process.on('close', (code) => {
       if (code !== 0) {
         console.error('yt-dlp stderr:', stderr);
-        reject(new Error(`yt-dlp exited with code ${code}: ${stderr}`));
+        
+        // Provide helpful error messages for common issues
+        if (stderr.includes('Sign in to confirm')) {
+          reject(new Error('YouTube bot detection triggered. Please use a different video or enable cookies.'));
+        } else if (stderr.includes('Private video')) {
+          reject(new Error('This video is private or unavailable.'));
+        } else if (stderr.includes('Video unavailable')) {
+          reject(new Error('Video unavailable. It may be deleted or region-restricted.'));
+        } else {
+          reject(new Error(`yt-dlp error: ${stderr.substring(0, 200)}`));
+        }
       } else {
         try {
           const json = JSON.parse(stdout);
           resolve(json);
         } catch (err) {
-          reject(new Error(`Failed to parse JSON: ${err.message}\nOutput: ${stdout.substring(0, 500)}`));
+          reject(new Error(`Failed to parse JSON: ${err.message}`));
         }
       }
     });
 
     process.on('error', (err) => {
-      reject(new Error(`Failed to spawn yt-dlp: ${err.message}. Make sure yt-dlp is installed.`));
+      reject(new Error(`Failed to spawn yt-dlp: ${err.message}`));
     });
   });
 }
@@ -71,14 +94,19 @@ app.use(express.static(path.join(__dirname, '../frontend')));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    hasCookies: fs.existsSync(COOKIES_PATH)
+  });
 });
 
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({ 
     status: 'YouTube to MP4 API Running',
-    endpoints: ['/health', '/api/diagnostic', '/api/formats', '/api/download']
+    endpoints: ['/health', '/api/diagnostic', '/api/formats', '/api/download'],
+    cookiesEnabled: fs.existsSync(COOKIES_PATH)
   });
 });
 
@@ -90,6 +118,8 @@ app.get('/api/diagnostic', async (req, res) => {
       platform: process.platform,
       arch: process.arch,
       ytdlpConfiguredPath: YTDLP_PATH,
+      cookiesPath: COOKIES_PATH,
+      hasCookies: fs.existsSync(COOKIES_PATH)
     };
 
     // Check yt-dlp
@@ -237,13 +267,10 @@ app.get('/api/download', async (req, res) => {
     
     if (type === 'audio') {
       filename = `${sanitizedTitle}.mp3`;
-      // For audio, use best audio format and convert to mp3
       formatArg = format_id || 'bestaudio';
     } else {
       filename = `${sanitizedTitle}.mp4`;
-      // For video, if format_id is provided use it, otherwise use best video+audio
       if (format_id) {
-        // Specific format requested - merge with best audio
         formatArg = `${format_id}+bestaudio/best`;
       } else {
         formatArg = 'bestvideo+bestaudio/best';
@@ -263,15 +290,20 @@ app.get('/api/download', async (req, res) => {
       '--no-check-certificates',
       '--no-warnings',
       '--quiet',
+      '--extractor-args', 'youtube:player_client=android',
       '--add-header', 'referer:youtube.com',
       '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     ];
+
+    // Add cookies if available
+    if (fs.existsSync(COOKIES_PATH)) {
+      args.push('--cookies', COOKIES_PATH);
+    }
 
     // Add audio conversion if needed
     if (type === 'audio') {
       args.push('--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
     } else {
-      // Merge video and audio for video downloads
       args.push('--merge-output-format', 'mp4');
     }
 
@@ -339,6 +371,14 @@ async function checkDependencies() {
     console.error('   Error:', error.message);
     console.error('   Please install: pip install yt-dlp');
     process.exit(1);
+  }
+
+  // Check for cookies
+  if (fs.existsSync(COOKIES_PATH)) {
+    console.log('✅ Cookies file found:', COOKIES_PATH);
+  } else {
+    console.log('⚠️  No cookies file found. Bot detection may cause issues.');
+    console.log('   To add cookies, create:', COOKIES_PATH);
   }
 
   console.log('\n=========================\n');
