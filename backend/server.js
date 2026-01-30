@@ -4,7 +4,6 @@ import { promisify } from 'util';
 import { exec, spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,11 +13,8 @@ const execPromise = promisify(exec);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Use system yt-dlp (installed via pip in build.sh)
+// Use system yt-dlp
 const YTDLP_PATH = 'yt-dlp';
-
-// Path for cookies file (if you decide to use one)
-const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
 
 // Helper function to execute yt-dlp with JSON output
 async function getVideoInfo(url, extraArgs = []) {
@@ -28,19 +24,13 @@ async function getVideoInfo(url, extraArgs = []) {
     '--no-check-certificates',
     '--no-warnings',
     '--prefer-free-formats',
-    // Bypass bot detection
-    '--extractor-args', 'youtube:player_client=android',
+    // 🔥 THIS IS THE KEY FIX - Use Android client to bypass bot detection
+    '--extractor-args', 'youtube:player_client=android,web',
     '--add-header', 'referer:youtube.com',
     '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     '--add-header', 'accept-language:en-US,en;q=0.9',
     ...extraArgs
   ];
-
-  // Add cookies if file exists
-  if (fs.existsSync(COOKIES_PATH)) {
-    args.push('--cookies', COOKIES_PATH);
-    console.log('Using cookies file:', COOKIES_PATH);
-  }
 
   return new Promise((resolve, reject) => {
     const process = spawn(YTDLP_PATH, args);
@@ -59,9 +49,9 @@ async function getVideoInfo(url, extraArgs = []) {
       if (code !== 0) {
         console.error('yt-dlp stderr:', stderr);
         
-        // Provide helpful error messages for common issues
+        // Provide helpful error messages
         if (stderr.includes('Sign in to confirm')) {
-          reject(new Error('YouTube bot detection triggered. Please use a different video or enable cookies.'));
+          reject(new Error('YouTube bot detection triggered. Try a different video or add cookies.'));
         } else if (stderr.includes('Private video')) {
           reject(new Error('This video is private or unavailable.'));
         } else if (stderr.includes('Video unavailable')) {
@@ -96,8 +86,7 @@ app.use(express.static(path.join(__dirname, '../frontend')));
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    timestamp: new Date().toISOString(),
-    hasCookies: fs.existsSync(COOKIES_PATH)
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -105,8 +94,7 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({ 
     status: 'YouTube to MP4 API Running',
-    endpoints: ['/health', '/api/diagnostic', '/api/formats', '/api/download'],
-    cookiesEnabled: fs.existsSync(COOKIES_PATH)
+    endpoints: ['/health', '/api/diagnostic', '/api/formats', '/api/download']
   });
 });
 
@@ -118,8 +106,6 @@ app.get('/api/diagnostic', async (req, res) => {
       platform: process.platform,
       arch: process.arch,
       ytdlpConfiguredPath: YTDLP_PATH,
-      cookiesPath: COOKIES_PATH,
-      hasCookies: fs.existsSync(COOKIES_PATH)
     };
 
     // Check yt-dlp
@@ -290,15 +276,11 @@ app.get('/api/download', async (req, res) => {
       '--no-check-certificates',
       '--no-warnings',
       '--quiet',
-      '--extractor-args', 'youtube:player_client=android',
+      // 🔥 Use Android client for downloads too
+      '--extractor-args', 'youtube:player_client=android,web',
       '--add-header', 'referer:youtube.com',
       '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     ];
-
-    // Add cookies if available
-    if (fs.existsSync(COOKIES_PATH)) {
-      args.push('--cookies', COOKIES_PATH);
-    }
 
     // Add audio conversion if needed
     if (type === 'audio') {
@@ -307,7 +289,7 @@ app.get('/api/download', async (req, res) => {
       args.push('--merge-output-format', 'mp4');
     }
 
-    console.log('Spawning yt-dlp with args:', args.join(' '));
+    console.log('Spawning yt-dlp for download...');
 
     const ytdlpProcess = spawn(YTDLP_PATH, args);
     
@@ -371,14 +353,6 @@ async function checkDependencies() {
     console.error('   Error:', error.message);
     console.error('   Please install: pip install yt-dlp');
     process.exit(1);
-  }
-
-  // Check for cookies
-  if (fs.existsSync(COOKIES_PATH)) {
-    console.log('✅ Cookies file found:', COOKIES_PATH);
-  } else {
-    console.log('⚠️  No cookies file found. Bot detection may cause issues.');
-    console.log('   To add cookies, create:', COOKIES_PATH);
   }
 
   console.log('\n=========================\n');
