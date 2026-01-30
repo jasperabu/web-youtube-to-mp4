@@ -1,27 +1,14 @@
 const express = require('express');
 const cors = require('cors');
 const ytdlp = require('yt-dlp-exec');
-const ffmpeg = require('fluent-ffmpeg');
 const { promisify } = require('util');
 const { exec } = require('child_process');
-const fs = require('fs');
 const path = require('path');
 
 const execPromise = promisify(exec);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// Configure yt-dlp binary path
-const YTDLP_BINARY = process.env.YTDLP_PATH || '/opt/render/project/src/yt-dlp';
-
-// Wrapper function for yt-dlp that uses the binary path
-const ytdlpExec = (url, options = {}) => {
-  return ytdlp(url, {
-    ...options,
-    binaryPath: YTDLP_BINARY
-  });
-};
 
 // Middleware
 app.use(cors());
@@ -35,58 +22,71 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Diagnostic endpoint to check yt-dlp installation
+// Diagnostic endpoint
 app.get('/api/diagnostic', async (req, res) => {
   try {
     const diagnostics = {
-      binaryPath: YTDLP_BINARY,
-      binaryExists: fs.existsSync(YTDLP_BINARY),
-      binaryExecutable: false,
-      version: null,
-      error: null
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
     };
 
-    // Check if file is executable
+    // Check yt-dlp
     try {
-      const stats = fs.statSync(YTDLP_BINARY);
-      diagnostics.binaryExecutable = !!(stats.mode & fs.constants.S_IXUSR);
-      diagnostics.fileMode = stats.mode.toString(8);
+      const { stdout: ytdlpPath } = await execPromise('which yt-dlp');
+      diagnostics.ytdlpPath = ytdlpPath.trim();
+      
+      const { stdout: ytdlpVersion } = await execPromise('yt-dlp --version');
+      diagnostics.ytdlpVersion = ytdlpVersion.trim();
+      diagnostics.ytdlpStatus = 'installed';
     } catch (err) {
-      diagnostics.error = `Stat error: ${err.message}`;
+      diagnostics.ytdlpStatus = 'not found';
+      diagnostics.ytdlpError = err.message;
     }
 
-    // Try to get version
+    // Check ffmpeg
     try {
-      const { stdout } = await execPromise(`${YTDLP_BINARY} --version`);
-      diagnostics.version = stdout.trim();
+      const { stdout: ffmpegVersion } = await execPromise('ffmpeg -version | head -n 1');
+      diagnostics.ffmpegVersion = ffmpegVersion.trim();
+      diagnostics.ffmpegStatus = 'installed';
     } catch (err) {
-      diagnostics.versionError = err.message;
-    }
-
-    // Check alternative locations
-    const altLocations = [
-      '/usr/local/bin/yt-dlp',
-      '/usr/bin/yt-dlp',
-      './yt-dlp',
-      'yt-dlp'
-    ];
-    
-    diagnostics.alternativeLocations = {};
-    for (const loc of altLocations) {
-      diagnostics.alternativeLocations[loc] = fs.existsSync(loc);
-    }
-
-    // Try which yt-dlp
-    try {
-      const { stdout } = await execPromise('which yt-dlp');
-      diagnostics.whichYtdlp = stdout.trim();
-    } catch (err) {
-      diagnostics.whichYtdlp = 'not found in PATH';
+      diagnostics.ffmpegStatus = 'not found';
+      diagnostics.ffmpegError = err.message;
     }
 
     res.json(diagnostics);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
+// Test yt-dlp directly
+app.get('/api/test-ytdlp', async (req, res) => {
+  try {
+    console.log('Testing yt-dlp with a simple video...');
+    
+    const testUrl = 'https://www.youtube.com/watch?v=jNQXAC9IVRw'; // Short "Me at the zoo" video
+    
+    const output = await ytdlp(testUrl, {
+      dumpSingleJson: true,
+      noCheckCertificates: true,
+      noWarnings: true,
+    });
+
+    res.json({
+      success: true,
+      title: output.title,
+      duration: output.duration,
+      formatCount: output.formats ? output.formats.length : 0
+    });
+  } catch (err) {
+    console.error('yt-dlp test error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      stderr: err.stderr,
+      stdout: err.stdout
+    });
   }
 });
 
@@ -100,19 +100,19 @@ app.get('/api/formats', async (req, res) => {
     }
 
     console.log('Fetching formats for:', url);
-    console.log('Using yt-dlp binary at:', YTDLP_BINARY);
 
-    const output = await ytdlpExec(url, {
+    const output = await ytdlp(url, {
       dumpSingleJson: true,
       noCheckCertificates: true,
       noWarnings: true,
       preferFreeFormats: true,
       addHeader: [
         'referer:youtube.com',
-        'user-agent:Mozilla/5.0'
+        'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       ]
     });
 
+    // Filter for formats with both video and audio
     const formats = output.formats
       .filter(f => f.vcodec !== 'none' && f.acodec !== 'none')
       .map(f => ({
@@ -120,12 +120,17 @@ app.get('/api/formats', async (req, res) => {
         ext: f.ext,
         resolution: f.resolution || `${f.width}x${f.height}`,
         filesize: f.filesize,
-        quality: f.quality
+        quality: f.quality,
+        fps: f.fps,
+        vcodec: f.vcodec,
+        acodec: f.acodec
       }))
       .sort((a, b) => {
-        const resA = parseInt(a.resolution);
-        const resB = parseInt(b.resolution);
-        return resB - resA;
+        const getHeight = (res) => {
+          const match = res.match(/\d+/);
+          return match ? parseInt(match[0]) : 0;
+        };
+        return getHeight(b.resolution) - getHeight(a.resolution);
       });
 
     res.json({
@@ -137,9 +142,16 @@ app.get('/api/formats', async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching formats:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stderr: error.stderr,
+      stdout: error.stdout
+    });
+    
     res.status(500).json({ 
       error: 'Failed to fetch video formats',
-      details: error.message 
+      details: error.message,
+      stderr: error.stderr
     });
   }
 });
@@ -155,6 +167,18 @@ app.post('/api/download', async (req, res) => {
 
     console.log('Downloading:', url, 'Format:', format_id);
 
+    // Get video info for filename
+    const info = await ytdlp(url, {
+      dumpSingleJson: true,
+      noCheckCertificates: true,
+      noWarnings: true
+    });
+
+    const filename = `${info.title.replace(/[^\w\s-]/gi, '_').substring(0, 100)}.mp4`;
+    
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'video/mp4');
+
     const options = {
       format: format_id || 'best',
       output: '-',
@@ -163,30 +187,24 @@ app.post('/api/download', async (req, res) => {
       preferFreeFormats: true,
       addHeader: [
         'referer:youtube.com',
-        'user-agent:Mozilla/5.0'
+        'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       ]
     };
 
-    // Get video info for filename
-    const info = await ytdlpExec(url, {
-      dumpSingleJson: true,
-      noCheckCertificates: true,
-      noWarnings: true
-    });
-
-    const filename = `${info.title.replace(/[^\w\s]/gi, '')}.mp4`;
-    
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type', 'video/mp4');
-
-    const ytdlpProcess = ytdlpExec(url, options);
+    const ytdlpProcess = ytdlp(url, options);
     
     ytdlpProcess.stdout.pipe(res);
     
     ytdlpProcess.on('error', (error) => {
       console.error('Download error:', error);
       if (!res.headersSent) {
-        res.status(500).json({ error: 'Download failed' });
+        res.status(500).json({ error: 'Download failed', details: error.message });
+      }
+    });
+
+    ytdlpProcess.on('close', (code) => {
+      if (code !== 0) {
+        console.error('yt-dlp exited with code:', code);
       }
     });
 
@@ -206,59 +224,35 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/index.html'));
 });
 
-// Check for required dependencies
+// Check for required dependencies on startup
 async function checkDependencies() {
-  console.log('\n=== Checking Dependencies ===');
+  console.log('\n=== Checking Dependencies ===\n');
   
   // Check FFmpeg
   try {
-    const { stdout } = await execPromise('ffmpeg -version');
-    console.log('✅ FFmpeg is installed and ready');
+    const { stdout } = await execPromise('ffmpeg -version | head -n 1');
+    console.log('✅ FFmpeg:', stdout.trim());
   } catch (error) {
-    console.error('❌ FFmpeg not found:', error.message);
+    console.error('❌ FFmpeg not found');
   }
 
   // Check yt-dlp
-  console.log('\nChecking yt-dlp binary...');
-  console.log('Expected path:', YTDLP_BINARY);
-  
-  if (fs.existsSync(YTDLP_BINARY)) {
-    try {
-      const stats = fs.statSync(YTDLP_BINARY);
-      const isExecutable = !!(stats.mode & fs.constants.S_IXUSR);
-      
-      if (isExecutable) {
-        const { stdout } = await execPromise(`${YTDLP_BINARY} --version`);
-        console.log('✅ yt-dlp is installed and ready');
-        console.log('   Version:', stdout.trim());
-        console.log('   Path:', YTDLP_BINARY);
-      } else {
-        console.log('⚠️  yt-dlp found but not executable');
-        console.log('   Attempting to fix permissions...');
-        await execPromise(`chmod +x ${YTDLP_BINARY}`);
-        console.log('✅ Permissions fixed');
-      }
-    } catch (error) {
-      console.error('❌ Error checking yt-dlp:', error.message);
-    }
-  } else {
-    console.log('⚠️  WARNING: yt-dlp not found at:', YTDLP_BINARY);
-    console.log('   Checking alternative locations...');
-    
-    // Check if yt-dlp is in PATH
-    try {
-      const { stdout } = await execPromise('which yt-dlp');
-      console.log('   Found in PATH:', stdout.trim());
-    } catch {
-      console.log('   Not found in PATH');
-    }
+  try {
+    const { stdout: path } = await execPromise('which yt-dlp');
+    const { stdout: version } = await execPromise('yt-dlp --version');
+    console.log('✅ yt-dlp:', version.trim());
+    console.log('   Path:', path.trim());
+  } catch (error) {
+    console.error('❌ yt-dlp not found');
+    console.error('   Error:', error.message);
   }
 
-  console.log('\n🎯 Server ready!\n');
+  console.log('\n=========================\n');
 }
 
 // Start server
 app.listen(PORT, async () => {
-  console.log(`\n🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
   await checkDependencies();
+  console.log('🎯 Server ready!\n');
 });
