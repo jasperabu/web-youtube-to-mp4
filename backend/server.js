@@ -650,18 +650,17 @@ app.use((req, res) => {
 });
 
 /* 🔹 START SERVER */
-app.listen(PORT, async () => {
-  console.log(`🚀 API running on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", async () => {
+  console.log(`🚀 API running on port ${PORT}`);
   console.log(`📡 CORS enabled for all origins (including streaming)`);
   console.log(`📁 Using temp directory: ${os.tmpdir()}`);
-  
+
   const hasFFmpeg = await checkFFmpeg();
   if (hasFFmpeg) {
     console.log(`✅ FFmpeg is installed and ready`);
   } else {
     console.log(`⚠️  WARNING: FFmpeg not found!`);
-    console.log(`⚠️  Audio downloads will use original format instead of MP3`);
   }
-  
-  console.log('\n🎯 Server ready! Compatible with yt-dlp 1.0.2\n');
+
+  console.log('\n🎯 Server ready!\n');
 });
