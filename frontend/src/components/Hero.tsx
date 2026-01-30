@@ -2,7 +2,7 @@ import { RefreshCw, Video, Music, FileText, Download, Loader2, AlertCircle } fro
 import { useState, useEffect, useRef } from 'react';
 
 // 🔥 ADD THIS AT THE TOP - Change this when you deploy to Render
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+const API_URL = process.env.REACT_APP_API_URL || 'https://web-youtube-to-mp4.onrender.com/';
 // When deployed, set REACT_APP_API_URL to: https://your-app-name.onrender.com
 
 type FormatType = 'mp4' | 'mp3' | 'subtitle';
