@@ -7,7 +7,11 @@ import path from "path";
 import os from "os";
 import { promisify } from "util";
 
+
 const execPromise = promisify(exec);
+
+const ytdlpPath = process.env.YT_DLP_PATH || '/opt/render/project/src/yt-dlp';
+process.env.YTDL_PATH = ytdlpPath;
 
 const app = express();
 const PORT = process.env.PORT || 4000;
