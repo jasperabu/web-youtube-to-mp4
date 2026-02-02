@@ -17,6 +17,9 @@ const PORT = process.env.PORT || 3000;
 // Use system yt-dlp
 const YTDLP_PATH = 'yt-dlp';
 
+// Path to cookies file
+const COOKIES_PATH = path.join(__dirname, 'youtube_cookies.txt');
+
 // CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
@@ -42,31 +45,47 @@ app.options('*', cors(corsOptions));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../frontend')));
 
+// Check if cookies file exists
+async function checkCookies() {
+  try {
+    await fs.access(COOKIES_PATH);
+    console.log('✅ YouTube cookies file found');
+    return true;
+  } catch {
+    console.log('⚠️  No cookies file found (optional)');
+    return false;
+  }
+}
+
 // Helper function to execute yt-dlp with multiple strategies
 async function getVideoInfo(url, retryCount = 0) {
   const maxRetries = 3;
+  const hasCookies = await checkCookies();
   
   // Strategy progression: each attempt tries a different approach
   const strategies = [
     {
-      name: 'Android Mobile',
+      name: 'Android Mobile with Cookies',
       args: [
         '--extractor-args', 'youtube:player_client=android',
         '--user-agent', 'com.google.android.youtube/19.09.37 (Linux; U; Android 13) gzip',
+        ...(hasCookies ? ['--cookies', COOKIES_PATH] : [])
       ]
     },
     {
-      name: 'iOS Mobile',
+      name: 'iOS Mobile with Cookies',
       args: [
         '--extractor-args', 'youtube:player_client=ios',
         '--user-agent', 'com.google.ios.youtube/19.09.3 (iPhone14,5; U; CPU iOS 15_6 like Mac OS X)',
+        ...(hasCookies ? ['--cookies', COOKIES_PATH] : [])
       ]
     },
     {
-      name: 'Android TV',
+      name: 'Android TV with Cookies',
       args: [
         '--extractor-args', 'youtube:player_client=tv_embedded',
         '--user-agent', 'Mozilla/5.0 (SMART-TV; Linux; Tizen 5.5) AppleWebKit/537.36',
+        ...(hasCookies ? ['--cookies', COOKIES_PATH] : [])
       ]
     }
   ];
@@ -132,7 +151,7 @@ async function getVideoInfo(url, retryCount = 0) {
         
         // Provide helpful error messages
         if (stderr.includes('Sign in to confirm') || stderr.includes('bot')) {
-          reject(new Error('YouTube is blocking this request. This video may require authentication or may be temporarily unavailable. Try: 1) Wait a few minutes and try again, 2) Try a different video, 3) The video may be age-restricted.'));
+          reject(new Error('YouTube is blocking this request. Consider adding YouTube cookies for better reliability. Try: 1) Wait a few minutes and try again, 2) Try a different video, 3) The video may be age-restricted.'));
         } else if (stderr.includes('Private video')) {
           reject(new Error('This video is private or unavailable.'));
         } else if (stderr.includes('Video unavailable')) {
@@ -183,34 +202,42 @@ function checkRateLimit(ip) {
 }
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+  const hasCookies = await checkCookies();
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
     cors: 'enabled',
-    version: '2.0'
+    version: '2.1',
+    cookies: hasCookies ? 'enabled' : 'disabled'
   });
 });
 
 // Root endpoint
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
+  const hasCookies = await checkCookies();
   res.json({ 
     status: 'YouTube to MP4 API Running',
-    version: '2.0',
+    version: '2.1',
     endpoints: ['/health', '/api/diagnostic', '/api/formats', '/api/download'],
     frontend: 'https://youtube-to-mp4-xta2.onrender.com',
-    notes: 'Uses multiple strategies to bypass YouTube restrictions'
+    cookies: hasCookies ? 'enabled' : 'disabled',
+    notes: 'Uses multiple strategies and YouTube cookies to bypass restrictions'
   });
 });
 
 // Diagnostic endpoint
 app.get('/api/diagnostic', async (req, res) => {
   try {
+    const hasCookies = await checkCookies();
+    
     const diagnostics = {
       nodeVersion: process.version,
       platform: process.platform,
       arch: process.arch,
       ytdlpConfiguredPath: YTDLP_PATH,
+      cookiesPath: COOKIES_PATH,
+      cookiesStatus: hasCookies ? 'found' : 'not found',
       cors: 'enabled',
       allowedOrigins: [
         'https://youtube-to-mp4-xta2.onrender.com',
@@ -256,6 +283,7 @@ app.get('/api/diagnostic', async (req, res) => {
 app.get('/api/test-ytdlp', async (req, res) => {
   try {
     console.log('Testing yt-dlp...');
+    const hasCookies = await checkCookies();
     
     // Use a simple, reliable test video
     const testUrl = 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
@@ -267,6 +295,7 @@ app.get('/api/test-ytdlp', async (req, res) => {
       title: output.title,
       duration: output.duration,
       formatCount: output.formats ? output.formats.length : 0,
+      cookiesUsed: hasCookies,
       message: 'yt-dlp is working correctly'
     });
   } catch (err) {
@@ -369,6 +398,7 @@ app.get('/api/download', async (req, res) => {
   try {
     const { url, format_id, type } = req.query;
     const clientIp = req.ip || req.connection.remoteAddress;
+    const hasCookies = await checkCookies();
 
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
@@ -385,6 +415,7 @@ app.get('/api/download', async (req, res) => {
     console.log(`📥 Download request: ${type} (${format_id})`);
     console.log(`   URL: ${url}`);
     console.log(`   Client IP: ${clientIp}`);
+    console.log(`   Using cookies: ${hasCookies}`);
 
     // Get video info for filename
     const info = await getVideoInfo(url);
@@ -422,6 +453,11 @@ app.get('/api/download', async (req, res) => {
       '--add-header', 'accept-language:en-US,en',
       '--geo-bypass'
     ];
+
+    // Add cookies if available
+    if (hasCookies) {
+      args.push('--cookies', COOKIES_PATH);
+    }
 
     if (type === 'audio') {
       args.push('--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
@@ -491,6 +527,13 @@ async function checkDependencies() {
     console.error('❌ yt-dlp not found!');
     console.error('   Please install: pip install yt-dlp');
     process.exit(1);
+  }
+
+  // Check for cookies
+  const hasCookies = await checkCookies();
+  if (!hasCookies) {
+    console.log('💡 Tip: Add YouTube cookies for better reliability');
+    console.log('   See COOKIES_GUIDE.md for instructions');
   }
 
   console.log('\n=========================\n');
