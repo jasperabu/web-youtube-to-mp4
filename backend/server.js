@@ -14,8 +14,33 @@ const execPromise = promisify(exec);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Use system yt-dlp
-const YTDLP_PATH = 'yt-dlp';
+// Find yt-dlp (try multiple locations)
+import os from 'os';
+
+let YTDLP_PATH = 'yt-dlp';
+
+// Check common installation locations
+const possiblePaths = [
+  'yt-dlp',
+  '/usr/local/bin/yt-dlp',
+  '/usr/bin/yt-dlp',
+  path.join(os.homedir(), '.local/bin/yt-dlp'),
+  path.join(process.env.HOME || '', '.local/bin/yt-dlp')
+];
+
+async function findYtDlp() {
+  for (const ytPath of possiblePaths) {
+    try {
+      const { stdout } = await execPromise(`${ytPath} --version`);
+      console.log(`✅ Found yt-dlp at: ${ytPath}`);
+      YTDLP_PATH = ytPath;
+      return true;
+    } catch (err) {
+      // Try next path
+    }
+  }
+  return false;
+}
 
 // Path to cookies file
 const COOKIES_PATH = path.join(__dirname, 'youtube_cookies.txt');
@@ -518,14 +543,23 @@ async function checkDependencies() {
     console.warn('⚠️  FFmpeg not found (optional)');
   }
 
-  try {
-    const { stdout: version } = await execPromise('yt-dlp --version');
-    const { stdout: pathOutput } = await execPromise('which yt-dlp');
-    console.log('✅ yt-dlp:', version.trim());
-    console.log('   Path:', pathOutput.trim());
-  } catch (error) {
+  // Find yt-dlp
+  const found = await findYtDlp();
+  
+  if (found) {
+    try {
+      const { stdout: version } = await execPromise(`${YTDLP_PATH} --version`);
+      console.log('✅ yt-dlp:', version.trim());
+      console.log('   Path:', YTDLP_PATH);
+    } catch (error) {
+      console.error('❌ Error checking yt-dlp version:', error.message);
+    }
+  } else {
     console.error('❌ yt-dlp not found!');
-    console.error('   Please install: pip install yt-dlp');
+    console.error('   Searched locations:');
+    possiblePaths.forEach(p => console.error(`   - ${p}`));
+    console.error('\n   Please install: pip3 install --user yt-dlp');
+    console.error('   And ensure ~/.local/bin is in PATH');
     process.exit(1);
   }
 
