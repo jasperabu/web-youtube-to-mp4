@@ -33,18 +33,35 @@ else
     exit 1
 fi
 
-# Install Node.js dependencies
+# Find and navigate to the correct directory
 echo ""
-echo "📦 Installing Node.js dependencies..."
-cd backend
+echo "🔍 Finding package.json..."
 
+# Check current directory
 if [ -f "package.json" ]; then
-    npm ci --production || npm install --production
-    echo "✅ Node.js dependencies installed"
+    echo "✅ Found package.json in current directory"
+    WORK_DIR="."
+elif [ -f "backend/package.json" ]; then
+    echo "✅ Found package.json in backend/"
+    WORK_DIR="backend"
+elif [ -f "../package.json" ]; then
+    echo "✅ Found package.json in parent directory"
+    WORK_DIR=".."
 else
     echo "❌ package.json not found!"
+    echo "Current directory: $(pwd)"
+    echo "Contents:"
+    ls -la
     exit 1
 fi
+
+# Install Node.js dependencies
+echo ""
+echo "📦 Installing Node.js dependencies in $WORK_DIR..."
+cd "$WORK_DIR"
+
+npm ci --production || npm install --production
+echo "✅ Node.js dependencies installed"
 
 # Check for cookies
 echo ""
@@ -78,4 +95,5 @@ fi
 echo ""
 echo "========================================"
 echo "✅ Build completed successfully!"
+echo "   Working directory: $(pwd)"
 echo "========================================"
