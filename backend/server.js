@@ -16,6 +16,17 @@ const PORT = process.env.PORT || 3000;
 // Use system yt-dlp
 const YTDLP_PATH = 'yt-dlp';
 
+// 🔥 FIX: Configure CORS to allow your frontend domain
+const corsOptions = {
+  origin: [
+    'https://youtube-to-mp4-xta2.onrender.com',  // Your frontend
+    'http://localhost:5173',                      // Local development
+    'http://localhost:3000',                      // Alternative local port
+  ],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
 // Helper function to execute yt-dlp with JSON output
 async function getVideoInfo(url, extraArgs = []) {
   const args = [
@@ -24,7 +35,7 @@ async function getVideoInfo(url, extraArgs = []) {
     '--no-check-certificates',
     '--no-warnings',
     '--prefer-free-formats',
-    // 🔥 THIS IS THE KEY FIX - Use Android client to bypass bot detection
+    // 🔥 Use Android client to bypass bot detection
     '--extractor-args', 'youtube:player_client=android,web',
     '--add-header', 'referer:youtube.com',
     '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -78,11 +89,11 @@ async function getVideoInfo(url, extraArgs = []) {
   });
 }
 
-// Middleware
-app.use(cors());
+// 🔥 FIX: Apply CORS middleware with specific origins
+app.use(cors(corsOptions));
 app.use(express.json());
 
-// Serve static files from frontend
+// Serve static files from frontend (if needed for same-domain deployment)
 app.use(express.static(path.join(__dirname, '../frontend')));
 
 // Health check endpoint
@@ -97,7 +108,8 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({ 
     status: 'YouTube to MP4 API Running',
-    endpoints: ['/health', '/api/diagnostic', '/api/formats', '/api/download']
+    endpoints: ['/health', '/api/diagnostic', '/api/formats', '/api/download'],
+    frontend: 'https://youtube-to-mp4-xta2.onrender.com'
   });
 });
 
@@ -364,6 +376,8 @@ async function checkDependencies() {
 // Start server
 app.listen(PORT, async () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌐 Frontend URL: https://youtube-to-mp4-xta2.onrender.com`);
+  console.log(`🔧 Backend URL: https://web-youtube-to-mp4.onrender.com`);
   await checkDependencies();
   console.log('🎯 Server ready!\n');
 });
