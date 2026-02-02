@@ -1,9 +1,8 @@
-import { RefreshCw, Video, Music, FileText, Download, Loader2, AlertCircle } from 'lucide-react';
+import { RefreshCw, Video, Music, FileText, Download, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 
-// 🔥 ADD THIS AT THE TOP - Change this when you deploy to Render
+// 🔥 API URL Configuration
 const API_URL = process.env.REACT_APP_API_URL || 'https://web-youtube-to-mp4.onrender.com';
-// When deployed, set REACT_APP_API_URL to: https://your-app-name.onrender.com
 
 type FormatType = 'mp4' | 'mp3' | 'subtitle';
 
@@ -55,19 +54,21 @@ export default function Hero(): JSX.Element {
   const [downloadStatus, setDownloadStatus] = useState<string>('');
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState(0);
   const [isFetching, setIsFetching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Check backend connection on mount
   useEffect(() => {
     console.log('🌐 API URL:', API_URL);
-    fetch(`${API_URL}/`)
-      .then(r => r.text())
-      .then(text => {
-        console.log('✅ Backend response:', text);
+    fetch(`${API_URL}/health`)
+      .then(r => r.json())
+      .then(data => {
+        console.log('✅ Backend connected:', data);
       })
       .catch(err => {
         console.error('❌ Backend connection failed:', err);
+        setError('Unable to connect to backend server. Please try again later.');
       });
   }, []);
 
@@ -80,10 +81,11 @@ export default function Hero(): JSX.Element {
   const handleShowThumbnail = async () => {
     const id = extractVideoId(url);
     if (!id) {
-      alert('Invalid YouTube URL');
+      setError('Invalid YouTube URL. Please enter a valid YouTube video URL.');
       return;
     }
 
+    setError(null);
     setVideoId(id);
     setVideoTitle(null);
     setVideoDuration(null);
@@ -93,13 +95,23 @@ export default function Hero(): JSX.Element {
     setIsFetching(true);
 
     try {
+      console.log('🔍 Fetching video info from:', `${API_URL}/api/formats`);
+      
       const res = await fetch(
-        `${API_URL}/api/formats?url=${encodeURIComponent(url)}`
+        `${API_URL}/api/formats?url=${encodeURIComponent(url)}`,
+        {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+          }
+        }
       );
 
       if (!res.ok) {
-        throw new Error("Backend returned error");
+        const errorData = await res.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.details || errorData.error || `Server returned ${res.status}`);
       }
+      
       const data = await res.json();
 
       setVideoTitle(data.title);
@@ -122,21 +134,34 @@ export default function Hero(): JSX.Element {
         });
         setSubtitles(subs);
       }
+      
+      console.log('✅ Video info fetched successfully');
     } catch (err) {
-      console.error('Failed to fetch video info', err);
-      alert('Failed to fetch video info. Check console.');
+      console.error('❌ Failed to fetch video info:', err);
+      
+      if (err instanceof Error) {
+        if (err.message.includes('bot detection') || err.message.includes('403')) {
+          setError('YouTube is blocking requests. Please wait a moment and try again, or try a different video.');
+        } else if (err.message.includes('Failed to fetch')) {
+          setError('Cannot connect to server. Please check your internet connection and try again.');
+        } else {
+          setError(err.message);
+        }
+      } else {
+        setError('An unexpected error occurred. Please try again.');
+      }
     } finally {
       setIsFetching(false);
     }
   };
 
-  // IMPROVED: Better download handling with proper timeout and streaming
   const handleDownloadMedia = async (formatId: string, type: 'audio' | 'video'): Promise<void> => {
     const itemKey = `${type}-${formatId}`;
     setDownloadingItem(itemKey);
     setIsDownloading(true);
     setProgress(0);
     setDownloadStatus('Initializing...');
+    setError(null);
 
     // Create abort controller for this download
     abortControllerRef.current = new AbortController();
@@ -153,14 +178,13 @@ export default function Hero(): JSX.Element {
       console.log(`🔽 Starting ${type} download:`, downloadUrl);
       setDownloadStatus('Connecting to server...');
       
-      // Fetch with no timeout - let the stream complete naturally
       const response = await fetch(downloadUrl, {
         signal: abortControllerRef.current.signal,
-        // Don't set any timeout - allow infinite streaming
       });
       
       if (!response.ok) {
-        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        const errorData = await response.json().catch(() => ({ error: 'Download failed' }));
+        throw new Error(errorData.details || errorData.error || `Server returned ${response.status}`);
       }
 
       // Get total file size from headers
@@ -212,12 +236,9 @@ export default function Hero(): JSX.Element {
             setDownloadStatus(
               `Downloading: ${(receivedLength / 1024 / 1024).toFixed(2)} MB / ${(total / 1024 / 1024).toFixed(2)} MB (${percentComplete}%)`
             );
-            console.log(`📥 Progress: ${percentComplete}% (${(receivedLength / 1024 / 1024).toFixed(2)} MB / ${(total / 1024 / 1024).toFixed(2)} MB)`);
           } else {
-            // If we don't know total size, just show received amount
-            setProgress(50); // Show indeterminate progress
+            setProgress(50);
             setDownloadStatus(`Downloading: ${(receivedLength / 1024 / 1024).toFixed(2)} MB...`);
-            console.log(`📥 Downloaded: ${(receivedLength / 1024 / 1024).toFixed(2)} MB`);
           }
           lastUpdateTime = now;
         }
@@ -276,11 +297,11 @@ export default function Hero(): JSX.Element {
         } else {
           const errorMsg = err.message;
           setDownloadStatus(`Error: ${errorMsg}`);
-          alert(`Download failed: ${errorMsg}\n\nCheck the console for details.`);
+          setError(`Download failed: ${errorMsg}`);
         }
       } else {
         setDownloadStatus('Unknown error occurred');
-        alert('Download failed. Check the console for details.');
+        setError('Download failed. Please try again.');
       }
     } finally {
       // Reset state after a delay
@@ -294,8 +315,6 @@ export default function Hero(): JSX.Element {
     }
   };
 
-
-
   return (
     <div className="pixel-bg min-h-screen pt-20 pb-12 px-4">
       <div className="max-w-4xl mx-auto">
@@ -305,6 +324,38 @@ export default function Hero(): JSX.Element {
           <p className="pixel-subtitle">PASTE · DOWNLOAD · ENJOY</p>
         </div>
 
+        {/* Error Message */}
+        {error && (
+          <div className="pixel-panel bg-red-50 border-red-300 mb-6">
+            <div className="flex gap-3 items-start">
+              <AlertCircle size={20} className="text-red-600 flex-shrink-0 mt-1" />
+              <div className="text-xs text-red-800">
+                <p className="font-semibold mb-1">Error:</p>
+                <p>{error}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Download Progress */}
+        {isDownloading && (
+          <div className="pixel-panel bg-blue-50 border-blue-300 mb-6">
+            <div className="flex gap-3 items-start">
+              <Loader2 size={20} className="text-blue-600 flex-shrink-0 mt-1 animate-spin" />
+              <div className="text-xs text-blue-800 flex-1">
+                <p className="font-semibold mb-2">{downloadStatus}</p>
+                {progress > 0 && (
+                  <div className="w-full bg-blue-200 rounded-full h-2">
+                    <div 
+                      className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       
         {/* Input + Format Tabs */}
         <div className="pixel-panel mb-8">
@@ -329,7 +380,10 @@ export default function Hero(): JSX.Element {
               className="pixel-input"
               placeholder="ENTER YOUTUBE URL..."
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={(e) => {
+                setUrl(e.target.value);
+                setError(null);
+              }}
             />
           </div>
 
@@ -537,11 +591,12 @@ export default function Hero(): JSX.Element {
               HOW TO USE
             </h3>
             <ol className="text-xs space-y-3" style={{ color: 'var(--pixel-gray)', lineHeight: '1.8' }}>
-              <li>1. COPY VIDEO URL</li>
-              <li>2. PASTE IN BOX</li>
-              <li>3. SELECT FORMAT</li>
-              <li>4. HIT DOWNLOAD</li>
-              <li>5. WAIT FOR COMPLETION (DO NOT CLOSE TAB)</li>
+              <li>1. COPY VIDEO URL FROM YOUTUBE</li>
+              <li>2. PASTE IN BOX ABOVE</li>
+              <li>3. SELECT FORMAT (VIDEO/AUDIO/SUBS)</li>
+              <li>4. CLICK GENERATE</li>
+              <li>5. CHOOSE QUALITY AND DOWNLOAD</li>
+              <li>6. KEEP TAB OPEN UNTIL DOWNLOAD COMPLETES</li>
             </ol>
           </div>
 
@@ -550,10 +605,11 @@ export default function Hero(): JSX.Element {
               FEATURES
             </h3>
             <ul className="text-xs space-y-3" style={{ color: 'var(--pixel-gray)', lineHeight: '1.8' }}>
-              <li>→ HD QUALITY</li>
-              <li>→ REAL PROGRESS</li>
-              <li>→ NO ADS</li>
-              <li>→ 100% FREE</li>
+              <li>→ HD QUALITY UP TO 4K</li>
+              <li>→ REAL-TIME PROGRESS</li>
+              <li>→ NO ADS OR POPUPS</li>
+              <li>→ 100% FREE FOREVER</li>
+              <li>→ FAST DOWNLOADS</li>
             </ul>
           </div>
         </div>
@@ -568,7 +624,8 @@ export default function Hero(): JSX.Element {
                 <li>• Keep this tab open during download</li>
                 <li>• Large files may take several minutes</li>
                 <li>• Check your Downloads folder when complete</li>
-                <li>• If download fails, try a lower quality format</li>
+                <li>• If you get a bot detection error, wait a minute and try again</li>
+                <li>• Try a different video if one doesn't work</li>
               </ul>
             </div>
           </div>

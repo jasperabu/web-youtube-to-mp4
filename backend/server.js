@@ -16,16 +16,37 @@ const PORT = process.env.PORT || 3000;
 // Use system yt-dlp
 const YTDLP_PATH = 'yt-dlp';
 
-// 🔥 FIX: Configure CORS to allow your frontend domain
+// 🔥 FIXED: Better CORS configuration
 const corsOptions = {
-  origin: [
-    'https://youtube-to-mp4-xta2.onrender.com',  // Your frontend
-    'http://localhost:5173',                      // Local development
-    'http://localhost:3000',                      // Alternative local port
-  ],
+  origin: function (origin, callback) {
+    const allowedOrigins = [
+      'https://youtube-to-mp4-xta2.onrender.com',
+      'http://localhost:5173',
+      'http://localhost:3000'
+    ];
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   optionsSuccessStatus: 200
 };
+
+// Apply CORS BEFORE other middleware
+app.use(cors(corsOptions));
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
+
+app.use(express.json());
+
+// Serve static files from frontend (if needed for same-domain deployment)
+app.use(express.static(path.join(__dirname, '../frontend')));
 
 // Helper function to execute yt-dlp with JSON output
 async function getVideoInfo(url, extraArgs = []) {
@@ -35,18 +56,17 @@ async function getVideoInfo(url, extraArgs = []) {
     '--no-check-certificates',
     '--no-warnings',
     '--prefer-free-formats',
-    // 🔥 Use Android client to bypass bot detection
-    '--extractor-args', 'youtube:player_client=android,web',
-    '--add-header', 'referer:youtube.com',
-    '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    '--add-header', 'accept-language:en-US,en;q=0.9',
-    '--no-check-certificate',
+    // 🔥 IMPROVED: Better bot detection bypass
+    '--extractor-args', 'youtube:player_client=android,ios,web',
+    '--user-agent', 'com.google.android.youtube/19.09.37 (Linux; U; Android 13) gzip',
+    '--add-header', 'accept-language:en-US,en',
     '--geo-bypass',
+    '--sleep-interval', '1',
+    '--max-sleep-interval', '3',
     ...extraArgs
   ];
 
   return new Promise((resolve, reject) => {
-    // 🔥 FIX: Changed 'process' to 'ytdlpProcess' to avoid naming conflict
     const ytdlpProcess = spawn(YTDLP_PATH, args);
     let stdout = '';
     let stderr = '';
@@ -64,12 +84,14 @@ async function getVideoInfo(url, extraArgs = []) {
         console.error('yt-dlp stderr:', stderr);
         
         // Provide helpful error messages
-        if (stderr.includes('Sign in to confirm')) {
-          reject(new Error('YouTube bot detection triggered. Try a different video or add cookies.'));
+        if (stderr.includes('Sign in to confirm') || stderr.includes('bot')) {
+          reject(new Error('YouTube bot detection triggered. Please try again in a moment, or try a different video.'));
         } else if (stderr.includes('Private video')) {
           reject(new Error('This video is private or unavailable.'));
         } else if (stderr.includes('Video unavailable')) {
           reject(new Error('Video unavailable. It may be deleted or region-restricted.'));
+        } else if (stderr.includes('HTTP Error 403')) {
+          reject(new Error('Access forbidden. YouTube may be rate limiting. Please wait a moment and try again.'));
         } else {
           reject(new Error(`yt-dlp error: ${stderr.substring(0, 200)}`));
         }
@@ -89,18 +111,12 @@ async function getVideoInfo(url, extraArgs = []) {
   });
 }
 
-// 🔥 FIX: Apply CORS middleware with specific origins
-app.use(cors(corsOptions));
-app.use(express.json());
-
-// Serve static files from frontend (if needed for same-domain deployment)
-app.use(express.static(path.join(__dirname, '../frontend')));
-
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    cors: 'enabled'
   });
 });
 
@@ -109,7 +125,8 @@ app.get('/', (req, res) => {
   res.json({ 
     status: 'YouTube to MP4 API Running',
     endpoints: ['/health', '/api/diagnostic', '/api/formats', '/api/download'],
-    frontend: 'https://youtube-to-mp4-xta2.onrender.com'
+    frontend: 'https://youtube-to-mp4-xta2.onrender.com',
+    cors: 'enabled'
   });
 });
 
@@ -121,6 +138,12 @@ app.get('/api/diagnostic', async (req, res) => {
       platform: process.platform,
       arch: process.arch,
       ytdlpConfiguredPath: YTDLP_PATH,
+      cors: 'enabled',
+      allowedOrigins: [
+        'https://youtube-to-mp4-xta2.onrender.com',
+        'http://localhost:5173',
+        'http://localhost:3000'
+      ]
     };
 
     // Check yt-dlp
@@ -292,9 +315,10 @@ app.get('/api/download', async (req, res) => {
       '--no-warnings',
       '--quiet',
       // 🔥 Use Android client for downloads too
-      '--extractor-args', 'youtube:player_client=android,web',
-      '--add-header', 'referer:youtube.com',
-      '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      '--extractor-args', 'youtube:player_client=android,ios,web',
+      '--user-agent', 'com.google.android.youtube/19.09.37 (Linux; U; Android 13) gzip',
+      '--add-header', 'accept-language:en-US,en',
+      '--geo-bypass'
     ];
 
     // Add audio conversion if needed
@@ -378,6 +402,7 @@ app.listen(PORT, async () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🌐 Frontend URL: https://youtube-to-mp4-xta2.onrender.com`);
   console.log(`🔧 Backend URL: https://web-youtube-to-mp4.onrender.com`);
+  console.log(`✅ CORS enabled for frontend`);
   await checkDependencies();
   console.log('🎯 Server ready!\n');
 });
