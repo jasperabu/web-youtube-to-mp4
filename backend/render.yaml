@@ -4,22 +4,19 @@ services:
     env: node
     region: oregon
     buildCommand: |
-      # Install yt-dlp
-      pip3 install --user yt-dlp
-      export PATH="$HOME/.local/bin:$PATH"
+      # Install yt-dlp (no --user flag needed in Render's environment)
+      pip3 install yt-dlp
+      
+      # Verify installation
+      yt-dlp --version
+      which yt-dlp
       
       # Install node dependencies
       cd backend && npm install
-      
-      # Verify installations
-      echo "Verifying yt-dlp..."
-      yt-dlp --version || $HOME/.local/bin/yt-dlp --version
     startCommand: cd backend && node server.js
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PATH
-        value: /opt/render/project/src/.local/bin:/usr/local/bin:/usr/bin:/bin
     plan: free
     healthCheckPath: /health
     autoDeploy: true

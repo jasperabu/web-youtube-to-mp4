@@ -4,55 +4,33 @@ set -e  # Exit on error
 echo "🚀 YouTube to MP4 - Render Build Script"
 echo "========================================"
 
-# Function to check command availability
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Install yt-dlp
+# Install yt-dlp (without --user since Render uses virtualenv)
 echo ""
 echo "📦 Installing yt-dlp..."
 
-# Try multiple installation methods
-if command_exists pip3; then
+# Install directly (no --user flag in virtualenv)
+if command -v pip3 &> /dev/null; then
     echo "Using pip3..."
-    pip3 install --user --upgrade yt-dlp
-elif command_exists pip; then
+    pip3 install yt-dlp
+elif command -v pip &> /dev/null; then
     echo "Using pip..."
-    pip install --user --upgrade yt-dlp
+    pip install yt-dlp
 else
     echo "❌ Error: pip not found!"
-    echo "Attempting to install pip..."
-    
-    # Try to get pip
-    curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
-    python3 get-pip.py --user
-    rm get-pip.py
-    
-    # Retry installation
-    pip3 install --user --upgrade yt-dlp
+    exit 1
 fi
-
-# Add user bin to PATH
-export PATH="$HOME/.local/bin:$PATH"
-echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> ~/.bashrc
 
 # Verify yt-dlp installation
 echo ""
 echo "🔍 Verifying yt-dlp installation..."
-if command_exists yt-dlp; then
+if command -v yt-dlp &> /dev/null; then
     YT_VERSION=$(yt-dlp --version)
     echo "✅ yt-dlp installed: v$YT_VERSION"
+    YT_PATH=$(which yt-dlp)
+    echo "✅ yt-dlp path: $YT_PATH"
 else
     echo "❌ yt-dlp not found in PATH"
-    echo "Checking ~/.local/bin..."
-    if [ -f "$HOME/.local/bin/yt-dlp" ]; then
-        echo "✅ Found at: $HOME/.local/bin/yt-dlp"
-        "$HOME/.local/bin/yt-dlp" --version
-    else
-        echo "❌ yt-dlp installation failed!"
-        exit 1
-    fi
+    exit 1
 fi
 
 # Install Node.js dependencies
@@ -90,7 +68,7 @@ fi
 # Verify FFmpeg
 echo ""
 echo "🔍 Checking FFmpeg..."
-if command_exists ffmpeg; then
+if command -v ffmpeg &> /dev/null; then
     FFMPEG_VERSION=$(ffmpeg -version | head -n 1)
     echo "✅ $FFMPEG_VERSION"
 else
