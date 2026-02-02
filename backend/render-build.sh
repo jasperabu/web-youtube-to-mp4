@@ -12,7 +12,7 @@ npm install
 
 # Install yt-dlp via pip
 echo "📥 Installing yt-dlp via pip..."
-pip install --break-system-packages -U yt-dlp
+pip install --upgrade --break-system-packages yt-dlp
 
 # Verify installation
 echo "✅ Verifying yt-dlp installation..."

@@ -24,16 +24,24 @@ async function getVideoInfo(url, extraArgs = []) {
     '--no-check-certificates',
     '--no-warnings',
     '--prefer-free-formats',
-    // 🔥 THIS IS THE KEY FIX - Use Android client to bypass bot detection
     '--extractor-args', 'youtube:player_client=android,web',
     '--add-header', 'referer:youtube.com',
     '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     '--add-header', 'accept-language:en-US,en;q=0.9',
+    // Add more aggressive options to bypass restrictions
+    '--no-check-certificate',
+    '--geo-bypass',
     ...extraArgs
   ];
 
+  console.log('Executing yt-dlp with args:', args.join(' '));
+
   return new Promise((resolve, reject) => {
-    const process = spawn(YTDLP_PATH, args);
+    const process = spawn(YTDLP_PATH, args, {
+      timeout: 30000, // 30 second timeout
+      env: { ...process.env, PYTHONUNBUFFERED: '1' }
+    });
+    
     let stdout = '';
     let stderr = '';
 
@@ -43,35 +51,61 @@ async function getVideoInfo(url, extraArgs = []) {
 
     process.stderr.on('data', (data) => {
       stderr += data.toString();
+      console.error('yt-dlp stderr chunk:', data.toString().substring(0, 200));
     });
 
     process.on('close', (code) => {
+      console.log('yt-dlp exit code:', code);
+      
       if (code !== 0) {
-        console.error('yt-dlp stderr:', stderr);
+        console.error('Full yt-dlp stderr:', stderr);
         
         // Provide helpful error messages
-        if (stderr.includes('Sign in to confirm')) {
-          reject(new Error('YouTube bot detection triggered. Try a different video or add cookies.'));
+        if (stderr.includes('Sign in to confirm') || stderr.includes('bot')) {
+          reject(new Error('YouTube bot detection. Try: 1) Different video 2) Update yt-dlp 3) Add --cookies'));
         } else if (stderr.includes('Private video')) {
           reject(new Error('This video is private or unavailable.'));
         } else if (stderr.includes('Video unavailable')) {
           reject(new Error('Video unavailable. It may be deleted or region-restricted.'));
+        } else if (stderr.includes('HTTP Error 403')) {
+          reject(new Error('Access denied (403). YouTube may be blocking requests. Try updating yt-dlp.'));
+        } else if (stderr.includes('HTTP Error 429')) {
+          reject(new Error('Rate limited (429). Too many requests. Please wait a few minutes.'));
         } else {
-          reject(new Error(`yt-dlp error: ${stderr.substring(0, 200)}`));
+          const shortError = stderr.substring(0, 300);
+          reject(new Error(`yt-dlp failed: ${shortError}`));
         }
       } else {
         try {
+          if (!stdout.trim()) {
+            reject(new Error('yt-dlp returned empty output'));
+            return;
+          }
+          
           const json = JSON.parse(stdout);
+          console.log('✅ Successfully parsed video info:', json.title);
           resolve(json);
         } catch (err) {
+          console.error('JSON parse error:', err.message);
+          console.error('Output was:', stdout.substring(0, 500));
           reject(new Error(`Failed to parse JSON: ${err.message}`));
         }
       }
     });
 
     process.on('error', (err) => {
+      console.error('Process spawn error:', err);
       reject(new Error(`Failed to spawn yt-dlp: ${err.message}`));
     });
+
+    // Add timeout handler
+    setTimeout(() => {
+      if (!process.killed) {
+        console.error('yt-dlp timeout, killing process');
+        process.kill();
+        reject(new Error('Request timed out after 30 seconds'));
+      }
+    }, 30000);
   });
 }
 
@@ -106,6 +140,7 @@ app.get('/api/diagnostic', async (req, res) => {
       platform: process.platform,
       arch: process.arch,
       ytdlpConfiguredPath: YTDLP_PATH,
+      timestamp: new Date().toISOString()
     };
 
     // Check yt-dlp
@@ -129,6 +164,14 @@ app.get('/api/diagnostic', async (req, res) => {
     } catch (err) {
       diagnostics.ffmpegStatus = 'not found';
       diagnostics.ffmpegError = err.message;
+    }
+
+    // Check Python
+    try {
+      const { stdout: pythonVersion } = await execPromise('python3 --version');
+      diagnostics.pythonVersion = pythonVersion.trim();
+    } catch (err) {
+      diagnostics.pythonError = err.message;
     }
 
     res.json(diagnostics);
@@ -171,9 +214,11 @@ app.get('/api/formats', async (req, res) => {
       return res.status(400).json({ error: 'URL parameter is required' });
     }
 
-    console.log('Fetching formats for:', url);
+    console.log('=== Fetching formats for:', url);
 
     const output = await getVideoInfo(url);
+
+    console.log('=== Got video info, processing formats...');
 
     // Separate video and audio formats
     const videoFormats = output.formats
@@ -215,6 +260,8 @@ app.get('/api/formats', async (req, res) => {
     const subtitles = output.subtitles || {};
     const automaticCaptions = output.automatic_captions || {};
 
+    console.log(`=== Returning ${videoFormats.length} video formats, ${audioFormats.length} audio formats`);
+
     res.json({
       title: output.title,
       thumbnail: output.thumbnail,
@@ -225,11 +272,13 @@ app.get('/api/formats', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching formats:', error);
+    console.error('=== Error fetching formats:', error);
+    console.error('Error stack:', error.stack);
     
     res.status(500).json({ 
       error: 'Failed to fetch video formats',
-      details: error.message
+      details: error.message,
+      help: 'Try: 1) Different video 2) Check /api/diagnostic 3) Check server logs'
     });
   }
 });
@@ -243,7 +292,7 @@ app.get('/api/download', async (req, res) => {
       return res.status(400).json({ error: 'URL is required' });
     }
 
-    console.log('Download request:', { url, format_id, type });
+    console.log('=== Download request:', { url, format_id, type });
 
     // Get video info for filename
     const info = await getVideoInfo(url);
@@ -263,8 +312,8 @@ app.get('/api/download', async (req, res) => {
       }
     }
     
-    console.log('Using format:', formatArg);
-    console.log('Filename:', filename);
+    console.log('=== Using format:', formatArg);
+    console.log('=== Filename:', filename);
 
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', type === 'audio' ? 'audio/mpeg' : 'video/mp4');
@@ -276,10 +325,11 @@ app.get('/api/download', async (req, res) => {
       '--no-check-certificates',
       '--no-warnings',
       '--quiet',
-      // 🔥 Use Android client for downloads too
       '--extractor-args', 'youtube:player_client=android,web',
       '--add-header', 'referer:youtube.com',
-      '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      '--no-check-certificate',
+      '--geo-bypass'
     ];
 
     // Add audio conversion if needed
@@ -289,14 +339,14 @@ app.get('/api/download', async (req, res) => {
       args.push('--merge-output-format', 'mp4');
     }
 
-    console.log('Spawning yt-dlp for download...');
+    console.log('=== Spawning yt-dlp for download...');
 
     const ytdlpProcess = spawn(YTDLP_PATH, args);
     
     ytdlpProcess.stdout.pipe(res);
     
     ytdlpProcess.stderr.on('data', (data) => {
-      console.error('yt-dlp stderr:', data.toString());
+      console.error('yt-dlp download stderr:', data.toString().substring(0, 200));
     });
     
     ytdlpProcess.on('error', (error) => {
@@ -308,14 +358,14 @@ app.get('/api/download', async (req, res) => {
 
     ytdlpProcess.on('close', (code) => {
       if (code !== 0) {
-        console.error('yt-dlp exited with code:', code);
+        console.error('=== yt-dlp download exited with code:', code);
       } else {
-        console.log('Download completed successfully');
+        console.log('=== Download completed successfully');
       }
     });
 
   } catch (error) {
-    console.error('Error in download:', error);
+    console.error('=== Error in download:', error);
     if (!res.headersSent) {
       res.status(500).json({ 
         error: 'Download failed',
@@ -348,11 +398,28 @@ async function checkDependencies() {
     const { stdout: pathOutput } = await execPromise('which yt-dlp');
     console.log('✅ yt-dlp:', version.trim());
     console.log('   Path:', pathOutput.trim());
+    
+    // Try to update yt-dlp
+    try {
+      console.log('Attempting to update yt-dlp...');
+      await execPromise('pip install --upgrade --break-system-packages yt-dlp', { timeout: 30000 });
+      console.log('✅ yt-dlp updated successfully');
+    } catch (updateErr) {
+      console.warn('⚠️  Could not auto-update yt-dlp:', updateErr.message);
+    }
   } catch (error) {
     console.error('❌ yt-dlp not found!');
     console.error('   Error:', error.message);
     console.error('   Please install: pip install yt-dlp');
     process.exit(1);
+  }
+
+  // Check Python
+  try {
+    const { stdout: pythonVersion } = await execPromise('python3 --version');
+    console.log('✅ Python:', pythonVersion.trim());
+  } catch (error) {
+    console.warn('⚠️  Python check failed:', error.message);
   }
 
   console.log('\n=========================\n');
